@@ -1,4 +1,4 @@
-# Console — v1 Plan
+# Chatty — v1 Plan
 
 A personal, native macOS terminal with GPU (Metal) rendering.
 
@@ -15,14 +15,18 @@ A personal, native macOS terminal with GPU (Metal) rendering.
 ## Files
 ```
 README.md                           short overview, requirements, build/run instructions
-Package.swift                       executable target "Console" with path "src", macOS 14+, depends on SwiftTerm
-.gitignore                          .build/, Console.app
-src/main.swift                      NSApplication setup, AppDelegate, one NSWindow, basic menu (Quit, Copy, Paste)
-src/TerminalView.swift              NSView backed by CAMetalLayer; owns Terminal + LocalProcess; keyboard,
+Package.swift                       executable target "Chatty" with path "src", macOS 14+, depends on SwiftTerm
+.gitignore                          .build/, dist/, .DS_Store
+src/App/main.swift                  NSApplication setup, AppDelegate, one NSWindow, basic menu (Quit, Copy, Paste)
+src/Terminal/TerminalView.swift     NSView backed by CAMetalLayer; owns Terminal + LocalProcess; keyboard,
                                     NSTextInputClient (IME), mouse selection, copy/paste, scroll wheel, resize
-src/Renderer.swift                  Metal device/queue/pipelines, embedded MSL source, instanced cell drawing
-src/GlyphAtlas.swift                Core Text rasterization of glyphs into an MTLTexture atlas, with a cache
-scripts/make-app.sh                 wraps the release binary into Console.app with a minimal Info.plist
+src/Rendering/Renderer.swift        Metal device/queue/pipelines, embedded MSL source, instanced cell drawing
+src/Rendering/GlyphAtlas.swift      Core Text rasterization of glyphs into an MTLTexture atlas, with a cache
+src/Settings/Settings.swift         settings model, ~/.config/chatty/config.yaml read/write (Yams)
+src/Settings/SettingsWindow.swift   Settings dialog (fonts)
+scripts/make-app.sh                 wraps the release binary into dist/Chatty.app with a minimal Info.plist
+scripts/make-icon.swift             draws the app icon for make-app.sh
+docs/PLAN.md                        this plan
 .claude/skills/                     project skills for Claude Code (see file-organisation)
 ```
 
@@ -56,7 +60,7 @@ Tabs, splits, settings UI, themes/config file, ligatures, hyperlinks, notificati
 
 ## Verification
 - `swift build` succeeds with CLT only (no Xcode).
-- `swift run Console` opens a window running a login shell.
+- `swift run Chatty` opens a window running a login shell.
 - Manual checks:
   - `ls --color`
   - 256-colour test: `for i in (seq 0 255); printf "\e[48;5;%dm %3d " $i $i; end; printf "\e[0m\n"`
@@ -68,5 +72,5 @@ Tabs, splits, settings UI, themes/config file, ligatures, hyperlinks, notificati
   - Japanese IME input with inline marked text
   - copy/paste, scroll back through `seq 1 5000`
   - window resize reflows rows/cols
-- GPU check: `MTL_HUD_ENABLED=1 swift run Console` shows the Metal performance HUD (fps / GPU time). `yes` should keep running smoothly without high CPU in Activity Monitor.
-- `scripts/make-app.sh` produces `Console.app`, which launches by double-click.
+- GPU check: `MTL_HUD_ENABLED=1 swift run Chatty` shows the Metal performance HUD (fps / GPU time). `yes` should keep running smoothly without high CPU in Activity Monitor.
+- `scripts/make-app.sh` produces `dist/Chatty.app`, which launches by double-click.
