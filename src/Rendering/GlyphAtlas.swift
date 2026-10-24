@@ -22,23 +22,14 @@ final class GlyphAtlas {
     private let size = 2048
     private let scale: CGFloat
     private let fonts: [CTFont]  // regular, bold, italic, bold italic
-    private let descent: CGFloat
+    private let baseline: CGFloat  // distance from the cell bottom, in points
     private var cache: [Key: Glyph] = [:]
     private var penX = 0, penY = 0
 
     init(device: MTLDevice, fonts settings: Settings.Fonts, scale: CGFloat) {
         self.scale = scale
-        let fontSize = CGFloat(settings.size)
-        let regular: CTFont, bold: CTFont
-        let manager = NSFontManager.shared
-        if let family = settings.family,
-           let font = manager.font(withFamily: family, traits: [], weight: 5, size: fontSize) {
-            regular = font as CTFont
-            bold = (manager.font(withFamily: family, traits: .boldFontMask, weight: 9, size: fontSize) ?? font) as CTFont
-        } else {
-            regular = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular) as CTFont
-            bold = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold) as CTFont
-        }
+        let regular = Self.font(settings, bold: false) as CTFont
+        let bold = Self.font(settings, bold: true) as CTFont
         func italic(_ font: CTFont) -> CTFont {
             CTFontCreateCopyWithSymbolicTraits(font, 0, nil, .traitItalic, .traitItalic) ?? font
         }
@@ -49,10 +40,12 @@ final class GlyphAtlas {
         CTFontGetGlyphsForCharacters(regular, &m, &glyph, 1)
         var advance = CGSize.zero
         CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyph, &advance, 1)
-        descent = CTFontGetDescent(regular)
+        let descent = CTFontGetDescent(regular)
         let height = CTFontGetAscent(regular) + descent + CTFontGetLeading(regular)
         cellWidth = Int((advance.width * scale).rounded(.up))
-        cellHeight = Int((height * scale).rounded(.up))
+        cellHeight = Int((height * CGFloat(settings.lineHeight) * scale).rounded(.up))
+        // Extra line height is split evenly above and below the text.
+        baseline = descent + (CGFloat(cellHeight) / scale - height) / 2
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: size, height: size, mipmapped: false)
@@ -81,7 +74,7 @@ final class GlyphAtlas {
                                 bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
             ctx.scaleBy(x: scale, y: scale)
-            ctx.textPosition = CGPoint(x: 0, y: descent)
+            ctx.textPosition = CGPoint(x: 0, y: baseline)
             CTLineDraw(line, ctx)
         }
         texture.replace(region: MTLRegionMake2D(penX, penY, w, h), mipmapLevel: 0,
@@ -94,6 +87,17 @@ final class GlyphAtlas {
         penX += w
         cache[key] = glyph
         return glyph
+    }
+
+    /// The configured font family, or the system monospaced font when unset or not installed.
+    static func font(_ settings: Settings.Fonts, bold: Bool) -> NSFont {
+        let size = CGFloat(settings.size)
+        if let family = settings.family,
+           let font = NSFontManager.shared.font(withFamily: family, traits: bold ? .boldFontMask : [],
+                                                weight: bold ? 9 : 5, size: size) {
+            return font
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
     }
 
     private static func hasColorFont(_ line: CTLine) -> Bool {

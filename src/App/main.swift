@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMenu()
-        view = TerminalView(cols: 80, rows: 24, fonts: settings.fonts)
+        view = TerminalView(cols: 80, rows: 24, settings: settings)
         window = NSWindow(contentRect: NSRect(origin: .zero, size: view.frame.size),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow = SettingsWindowController(settings: settings) { [weak self] newSettings in
                 guard let self else { return }
                 settings = newSettings
-                view.setFonts(newSettings.fonts)
+                view.apply(newSettings)
                 do { try newSettings.save() } catch { NSApp.presentError(error) }
             }
         }

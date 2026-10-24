@@ -14,18 +14,23 @@ final class TerminalView: NSView, TerminalDelegate, LocalProcessDelegate, NSText
     private var scrollRemainder: CGFloat = 0
     private var selection: (start: Position, end: Position)?  // scroll-invariant rows, inclusive
     private var markedText = ""
+    private var general: Settings.General
 
-    init(cols: Int, rows: Int, fonts: Settings.Fonts) {
-        renderer = Renderer(fonts: fonts, scale: NSScreen.main?.backingScaleFactor ?? 2)
+    init(cols: Int, rows: Int, settings: Settings) {
+        renderer = Renderer(fonts: settings.fonts, appearance: settings.appearance,
+                            scale: NSScreen.main?.backingScaleFactor ?? 2)
+        general = settings.general
         super.init(frame: .zero)
         metalLayer.device = renderer.device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         metalLayer.contentsScale = renderer.scale
         wantsLayer = true
-        terminal = Terminal(delegate: self, options: TerminalOptions(cols: cols, rows: rows))
+        terminal = Terminal(delegate: self, options: TerminalOptions(cols: cols, rows: rows,
+                                                                     scrollback: general.scrollback))
         process = LocalProcess(delegate: self, dispatchQueue: .main)
-        setFrameSize(NSSize(width: CGFloat(cols) * cellSize.width, height: CGFloat(rows) * cellSize.height))
+        setFrameSize(NSSize(width: CGFloat(cols) * cellSize.width + 2 * padding,
+                            height: CGFloat(rows) * cellSize.height + 2 * padding))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -35,21 +40,40 @@ final class TerminalView: NSView, TerminalDelegate, LocalProcessDelegate, NSText
                height: CGFloat(renderer.atlas.cellHeight) / renderer.scale)
     }
 
-    func setFonts(_ fonts: Settings.Fonts) {
-        renderer.setFonts(fonts)
+    /// Space between the view edge and the grid, in points, rounded to whole pixels like the renderer.
+    private var padding: CGFloat { (renderer.appearance.padding * renderer.scale).rounded() / renderer.scale }
+
+    /// Applies changed settings to the running terminal. Shell and working directory only affect new sessions.
+    func apply(_ settings: Settings) {
+        renderer.setFonts(settings.fonts)
+        renderer.setAppearance(settings.appearance)
+        if settings.general.scrollback != general.scrollback {
+            terminal.changeScrollback(settings.general.scrollback)
+        }
+        general = settings.general
+        updateOpacity()
         window?.contentResizeIncrements = cellSize
         updateGridSize()
     }
 
+    private func updateOpacity() {
+        let opaque = renderer.appearance.opacity >= 1
+        metalLayer.isOpaque = opaque
+        window?.isOpaque = opaque
+        window?.backgroundColor = opaque ? .windowBackgroundColor : .clear
+        needsRender = true
+    }
+
     func startShell() {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         var env = ProcessInfo.processInfo.environment
+        let shell = general.shell.map { ($0 as NSString).expandingTildeInPath } ?? env["SHELL"] ?? "/bin/zsh"
+        let directory = general.workingDirectory.map { ($0 as NSString).expandingTildeInPath } ?? NSHomeDirectory()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         process.startProcess(executable: shell, args: [], environment: env.map { "\($0)=\($1)" },
                              execName: "-" + (shell as NSString).lastPathComponent,
-                             currentDirectory: NSHomeDirectory())
+                             currentDirectory: directory)
     }
 
     // MARK: - View lifecycle and rendering
@@ -67,6 +91,7 @@ final class TerminalView: NSView, TerminalDelegate, LocalProcessDelegate, NSText
             NotificationCenter.default.addObserver(self, selector: #selector(setNeedsRender),
                                                    name: name, object: window)
         }
+        updateOpacity()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -86,8 +111,9 @@ final class TerminalView: NSView, TerminalDelegate, LocalProcessDelegate, NSText
         guard terminal != nil else { return }
         let scale = renderer.scale
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
-        let cols = max(2, Int(bounds.width * scale) / renderer.atlas.cellWidth)
-        let rows = max(1, Int(bounds.height * scale) / renderer.atlas.cellHeight)
+        let inset = 2 * padding * scale
+        let cols = max(2, Int(bounds.width * scale - inset) / renderer.atlas.cellWidth)
+        let rows = max(1, Int(bounds.height * scale - inset) / renderer.atlas.cellHeight)
         if cols != terminal.cols || rows != terminal.rows {
             terminal.resize(cols: cols, rows: rows)
             var size = getWindowSize()
@@ -260,8 +286,8 @@ final class TerminalView: NSView, TerminalDelegate, LocalProcessDelegate, NSText
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        let cell = NSRect(x: CGFloat(terminal.buffer.x) * cellSize.width,
-                          y: CGFloat(terminal.buffer.y) * cellSize.height,
+        let cell = NSRect(x: padding + CGFloat(terminal.buffer.x) * cellSize.width,
+                          y: padding + CGFloat(terminal.buffer.y) * cellSize.height,
                           width: cellSize.width, height: cellSize.height)
         return window?.convertToScreen(convert(cell, to: nil)) ?? .zero
     }
@@ -272,7 +298,7 @@ final class TerminalView: NSView, TerminalDelegate, LocalProcessDelegate, NSText
 
     private func cell(for event: NSEvent) -> (col: Int, row: Int) {
         let p = convert(event.locationInWindow, from: nil)
-        let col = Int(p.x / cellSize.width), row = Int(p.y / cellSize.height)
+        let col = Int((p.x - padding) / cellSize.width), row = Int((p.y - padding) / cellSize.height)
         return (min(max(col, 0), terminal.cols - 1), min(max(row, 0), terminal.rows - 1))
     }
 

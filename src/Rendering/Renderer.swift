@@ -11,22 +11,28 @@ struct Quad {
     var mode: Float = 0  // 0 solid, 1 glyph mask tinted by color, 2 color glyph (emoji)
 }
 
+/// Vertex shader uniforms, in pixels. Layout matches `Uniforms` in the shader source below.
+private struct Uniforms {
+    var viewport: SIMD2<Float>
+    var origin: SIMD2<Float>
+}
+
 /// Turns the visible terminal grid into quads and draws them with a single instanced draw call.
 final class Renderer {
-    static let foreground = SIMD4<Float>(0.86, 0.86, 0.86, 1)
-    static let background = SIMD4<Float>(0.11, 0.11, 0.12, 1)
-    static let selection = SIMD4<Float>(0.26, 0.36, 0.55, 1)
-
     let device: MTLDevice
     private(set) var atlas: GlyphAtlas
     private(set) var scale: CGFloat
+    private(set) var appearance: Settings.Appearance
     private var fonts: Settings.Fonts
+    private var foreground, background, cursor, selection: SIMD4<Float>
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let palette = Renderer.makePalette()
 
-    init(fonts: Settings.Fonts, scale: CGFloat) {
+    init(fonts: Settings.Fonts, appearance: Settings.Appearance, scale: CGFloat) {
         self.fonts = fonts
+        self.appearance = appearance
+        (foreground, background, cursor, selection) = Self.colors(appearance)
         self.scale = scale
         device = MTLCreateSystemDefaultDevice()!
         queue = device.makeCommandQueue()!
@@ -57,6 +63,15 @@ final class Renderer {
         atlas = GlyphAtlas(device: device, fonts: newFonts, scale: scale)
     }
 
+    func setAppearance(_ newAppearance: Settings.Appearance) {
+        appearance = newAppearance
+        (foreground, background, cursor, selection) = Self.colors(newAppearance)
+    }
+
+    private static func colors(_ a: Settings.Appearance) -> (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) {
+        (SIMD4(hex: a.foreground), SIMD4(hex: a.background), SIMD4(hex: a.cursor), SIMD4(hex: a.selection))
+    }
+
     /// Draws rows `top..<top+rows` (scroll-invariant row numbers). `selection` is inclusive and ordered.
     func draw(in layer: CAMetalLayer, terminal: Terminal, top: Int, showCursor: Bool, focused: Bool,
               selection: (start: Position, end: Position)?, markedText: String) {
@@ -81,12 +96,13 @@ final class Renderer {
                 let attr = cell.attribute
                 var fg = color(attr.fg, foreground: true), bg = color(attr.bg, foreground: false)
                 if attr.style.contains(.inverse) { swap(&fg, &bg) }
-                if let selection, Self.contains(selection, col: col, row: row) { bg = Self.selection }
+                if let s = selection, Self.contains(s, col: col, row: row) { bg = self.selection }
                 if attr.style.contains(.dim) { fg = bg + (fg - bg) * 0.6 }
-                if drawCursor && focused && screenRow == cursorRow && col == cursorCol { fg = Self.background }
+                if drawCursor && focused && appearance.cursorStyle == .block
+                    && screenRow == cursorRow && col == cursorCol { fg = background }
 
                 let x = Float(col) * cw, w = cw * Float(width)
-                if bg != Self.background {
+                if bg != background {
                     backgrounds.append(Quad(pos: [x, y], size: [w, ch], color: bg))
                 }
                 let text = cell.getText()
@@ -104,15 +120,20 @@ final class Renderer {
 
         if drawCursor {
             let x = Float(cursorCol) * cw, y = Float(cursorRow) * ch
-            if focused {
-                backgrounds.append(Quad(pos: [x, y], size: [cw, ch], color: Self.foreground))
-            } else {
+            switch (appearance.cursorStyle, focused) {
+            case (.block, true):
+                backgrounds.append(Quad(pos: [x, y], size: [cw, ch], color: cursor))
+            case (.block, false):
                 overlays += [
-                    Quad(pos: [x, y], size: [cw, thickness], color: Self.foreground),
-                    Quad(pos: [x, y + ch - thickness], size: [cw, thickness], color: Self.foreground),
-                    Quad(pos: [x, y], size: [thickness, ch], color: Self.foreground),
-                    Quad(pos: [x + cw - thickness, y], size: [thickness, ch], color: Self.foreground),
+                    Quad(pos: [x, y], size: [cw, thickness], color: cursor),
+                    Quad(pos: [x, y + ch - thickness], size: [cw, thickness], color: cursor),
+                    Quad(pos: [x, y], size: [thickness, ch], color: cursor),
+                    Quad(pos: [x + cw - thickness, y], size: [thickness, ch], color: cursor),
                 ]
+            case (.underline, _):
+                overlays.append(Quad(pos: [x, y + ch - 2 * thickness], size: [cw, 2 * thickness], color: cursor))
+            case (.bar, _):
+                overlays.append(Quad(pos: [x, y], size: [2 * thickness, ch], color: cursor))
             }
         }
 
@@ -123,12 +144,12 @@ final class Renderer {
         for character in markedText {
             let wide = character.unicodeScalars.first!.value >= 0x1100
             let w = cw * (wide ? 2 : 1)
-            marked.append(Quad(pos: [x, y], size: [w, ch], color: Self.background))
+            marked.append(Quad(pos: [x, y], size: [w, ch], color: background))
             if let glyph = atlas.glyph(String(character), bold: false, italic: false, wide: wide) {
-                marked.append(Quad(pos: [x, y], size: [w, ch], uv: glyph.uv, color: Self.foreground,
+                marked.append(Quad(pos: [x, y], size: [w, ch], uv: glyph.uv, color: foreground,
                                    mode: glyph.isColor ? 2 : 1))
             }
-            marked.append(Quad(pos: [x, y + ch - 2 * thickness], size: [w, thickness], color: Self.foreground))
+            marked.append(Quad(pos: [x, y + ch - 2 * thickness], size: [w, thickness], color: foreground))
             x += w
         }
 
@@ -137,17 +158,20 @@ final class Renderer {
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
-        let bg = Self.background
+        // The window background is premultiplied by the opacity setting.
+        let bg = background * Float(appearance.opacity)
         pass.colorAttachments[0].clearColor = MTLClearColor(red: Double(bg.x), green: Double(bg.y),
-                                                            blue: Double(bg.z), alpha: 1)
+                                                            blue: Double(bg.z), alpha: Double(bg.w))
         let commands = queue.makeCommandBuffer()!
         let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
         if !quads.isEmpty {
             let instances = device.makeBuffer(bytes: quads, length: MemoryLayout<Quad>.stride * quads.count)!
-            var viewport = SIMD2<Float>(Float(drawable.texture.width), Float(drawable.texture.height))
+            let padding = Float((appearance.padding * scale).rounded())
+            var uniforms = Uniforms(viewport: [Float(drawable.texture.width), Float(drawable.texture.height)],
+                                    origin: [padding, padding])
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBuffer(instances, offset: 0, index: 0)
-            encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
             encoder.setFragmentTexture(atlas.texture, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
                                    instanceCount: quads.count)
@@ -170,9 +194,9 @@ final class Renderer {
         case .trueColor(let r, let g, let b):
             return SIMD4(Float(r) / 255, Float(g) / 255, Float(b) / 255, 1)
         case .defaultColor:
-            return foreground ? Self.foreground : Self.background
+            return foreground ? self.foreground : background
         case .defaultInvertedColor:
-            return foreground ? Self.background : Self.foreground
+            return foreground ? background : self.foreground
         }
     }
 
@@ -197,6 +221,7 @@ final class Renderer {
     using namespace metal;
 
     struct Quad { float2 pos; float2 size; float4 uv; float4 color; float mode; };
+    struct Uniforms { float2 viewport; float2 origin; };
     struct VertexOut {
         float4 position [[position]];
         float2 uv;
@@ -206,12 +231,12 @@ final class Renderer {
 
     vertex VertexOut vertexMain(uint vid [[vertex_id]], uint iid [[instance_id]],
                                 constant Quad *quads [[buffer(0)]],
-                                constant float2 &viewport [[buffer(1)]]) {
+                                constant Uniforms &u [[buffer(1)]]) {
         Quad q = quads[iid];
         float2 corner = float2(vid & 1, vid >> 1);
-        float2 p = q.pos + corner * q.size;
+        float2 p = u.origin + q.pos + corner * q.size;
         VertexOut out;
-        out.position = float4(p.x / viewport.x * 2 - 1, 1 - p.y / viewport.y * 2, 0, 1);
+        out.position = float4(p.x / u.viewport.x * 2 - 1, 1 - p.y / u.viewport.y * 2, 0, 1);
         out.uv = mix(q.uv.xy, q.uv.zw, corner);
         out.color = q.color;
         out.mode = q.mode;
