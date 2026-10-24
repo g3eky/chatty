@@ -27,12 +27,13 @@ final class Renderer {
     private var foreground, background, cursor, selection: SIMD4<Float>
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
-    private let palette = Renderer.makePalette()
+    private var palette: [SIMD4<Float>]
 
     init(fonts: Settings.Fonts, appearance: Settings.Appearance, scale: CGFloat) {
         self.fonts = fonts
         self.appearance = appearance
         (foreground, background, cursor, selection) = Self.colors(appearance)
+        palette = Self.makePalette(ansi: Theme.named(appearance.theme)?.ansi)
         self.scale = scale
         device = MTLCreateSystemDefaultDevice()!
         queue = device.makeCommandQueue()!
@@ -66,6 +67,7 @@ final class Renderer {
     func setAppearance(_ newAppearance: Settings.Appearance) {
         appearance = newAppearance
         (foreground, background, cursor, selection) = Self.colors(newAppearance)
+        palette = Self.makePalette(ansi: Theme.named(newAppearance.theme)?.ansi)
     }
 
     private static func colors(_ a: Settings.Appearance) -> (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) {
@@ -200,9 +202,9 @@ final class Renderer {
         }
     }
 
-    /// 16 ANSI colors from SwiftTerm, then the xterm 6x6x6 cube and 24-step gray ramp.
-    private static func makePalette() -> [SIMD4<Float>] {
-        var palette = Color.defaultInstalledColors.prefix(16).map {
+    /// 16 ANSI colors from the theme (or SwiftTerm's defaults), then the xterm 6x6x6 cube and 24-step gray ramp.
+    private static func makePalette(ansi: [String]?) -> [SIMD4<Float>] {
+        var palette = ansi?.map { SIMD4<Float>(hex: $0) } ?? Color.defaultInstalledColors.prefix(16).map {
             SIMD4<Float>(Float($0.red) / 65535, Float($0.green) / 65535, Float($0.blue) / 65535, 1)
         }
         let levels: [Float] = [0, 95, 135, 175, 215, 255]

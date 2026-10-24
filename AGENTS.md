@@ -25,6 +25,7 @@ All source code lives in `src/` (`Package.swift` sets the target `path: "src"`),
 - `src/Rendering/GlyphAtlas.swift`: Core Text glyph rasterization into a texture atlas
 - `src/Settings/Settings.swift`: settings model, read from and saved to `~/.config/chatty/config.yaml`
 - `src/Settings/SettingsWindow.swift`: the Settings dialog
+- `src/Settings/Themes.swift`: built-in color schemes (Catppuccin Latte, Frappé, Macchiato, Mocha)
 - `scripts/`: build and packaging scripts (`make-app.sh`, `make-icon.swift`)
 - `docs/`: plan and design notes
 - `dist/`: built app bundle, not committed

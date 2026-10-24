@@ -14,6 +14,7 @@ struct Settings: Codable, Equatable {
     }
 
     struct Appearance: Codable, Equatable {
+        var theme: String?  // a `Theme` name; supplies the 16 ANSI colors. nil uses SwiftTerm's defaults
         var foreground = "#DBDBDB"
         var background = "#1C1C1F"
         var cursor = "#DBDBDB"
@@ -80,6 +81,7 @@ extension Settings.General {
 extension Settings.Appearance {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self), d = Self()
+        theme = try c.decodeIfPresent(String.self, forKey: .theme)
         foreground = try c.value(.foreground, default: d.foreground)
         background = try c.value(.background, default: d.background)
         cursor = try c.value(.cursor, default: d.cursor)
@@ -87,6 +89,13 @@ extension Settings.Appearance {
         padding = try c.value(.padding, default: d.padding)
         opacity = try c.value(.opacity, default: d.opacity)
         cursorStyle = try c.value(.cursorStyle, default: d.cursorStyle)
+    }
+
+    /// Selects a theme and takes its text, background, cursor and selection colors. nil keeps the current colors.
+    mutating func apply(theme name: String?) {
+        theme = name
+        guard let t = Theme.named(name) else { return }
+        (foreground, background, cursor, selection) = (t.foreground, t.background, t.cursor, t.selection)
     }
 }
 

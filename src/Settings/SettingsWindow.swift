@@ -14,7 +14,7 @@ final class SettingsWindowController: NSWindowController {
         super.init(window: window)
 
         tabs.addTabViewItem(Self.tab("General", symbol: "gearshape", height: 300, GeneralSettings(model: model)))
-        tabs.addTabViewItem(Self.tab("Appearance", symbol: "paintpalette", height: 480,
+        tabs.addTabViewItem(Self.tab("Appearance", symbol: "paintpalette", height: 560,
                                      AppearanceSettings(model: model)))
         tabs.addTabViewItem(Self.tab("Fonts", symbol: "textformat", height: 370, FontSettings(model: model)))
         window.center()
@@ -105,6 +105,14 @@ private struct AppearanceSettings: View {
 
     var body: some View {
         Form {
+            Section("Theme") {
+                Picker("Color scheme", selection: Binding(get: { model.settings.appearance.theme },
+                                                          set: { model.settings.appearance.apply(theme: $0) })) {
+                    Text("Custom").tag(String?.none)
+                    Divider()
+                    ForEach(Theme.all, id: \.name) { Text($0.name).tag(String?.some($0.name)) }
+                }
+            }
             Section("Colors") {
                 ColorPicker("Text", selection: $model.settings.appearance.foreground.color, supportsOpacity: false)
                 ColorPicker("Background", selection: $model.settings.appearance.background.color,
